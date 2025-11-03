@@ -1,77 +1,91 @@
 import streamlit as st
 from transformers import pipeline
 
+# --- Streamlit page setup ---
 st.set_page_config(page_title="GPT-2 Chatbot", page_icon="🤖", layout="centered")
 
+# --- Load the GPT-2 model once and reuse ---
 @st.cache_resource(show_spinner=True)
-def load_generator():
-    # Smallest simplest model; downloads once and reuses
-    gen = pipeline("text-generation", model="openai-community/gpt2")
-    # ensure padding token is valid for generation
-    gen.tokenizer.pad_token = gen.tokenizer.eos_token
-    return gen
+def load_text_generator():
+    text_generator = pipeline("text-generation", model="openai-community/gpt2")
+    text_generator.tokenizer.pad_token = text_generator.tokenizer.eos_token
+    return text_generator
 
-SYSTEM = (
+
+# --- System behavior prompt to guide GPT-2 ---
+SYSTEM_INSTRUCTION = (
     "You are a helpful assistant for software engineering. "
     "Answer concisely and give short code examples when useful. "
     "If unsure, say you are unsure.\n\n"
 )
 
-def build_prompt(history, user_msg):
-    # Very light chat-style prompt for gpt2 (not instruction-tuned)
-    convo = []
-    for u, a in history:
-        convo.append(f"Question: {u}\nAnswer: {a}\n")
-    convo.append(f"Question: {user_msg}\nAnswer:")
-    return SYSTEM + "\n".join(convo)
 
+# --- Build the conversation prompt for GPT-2 ---
+def build_conversation_prompt(chat_history, user_question):
+    formatted_conversation = []
+    for previous_question, previous_answer in chat_history:
+        formatted_conversation.append(f"Question: {previous_question}\nAnswer: {previous_answer}\n")
+
+    formatted_conversation.append(f"Question: {user_question}\nAnswer:")
+    return SYSTEM_INSTRUCTION + "\n".join(formatted_conversation)
+
+
+# --- Page header ---
 st.title("🤖 GPT-2 Chatbot (Hugging Face)")
-st.caption("Simple local demo using `openai-community/gpt2`. For better quality, swap to a small instruct model later.")
+st.caption(
+    "A simple local chatbot using the `openai-community/gpt2` model. "
+    "For better answers, you can swap it with a small instruction-tuned model."
+)
 
-# Sidebar controls
+
+# --- Sidebar for configuration options ---
 with st.sidebar:
-    st.header("Settings")
-    max_new = st.slider("Max new tokens", 20, 300, 120, 10)
-    temp = st.slider("Temperature", 0.1, 1.0, 0.5, 0.1)
-    top_p = st.slider("Top-p", 0.1, 1.0, 0.9, 0.05)
-    rep_pen = st.slider("Repetition penalty", 1.0, 2.0, 1.15, 0.05)
-    if st.button("Clear chat"):
-        st.session_state.history = []
+    st.header("⚙️ Model Settings")
+    max_new_tokens = st.slider("Maximum new tokens", 20, 300, 120, 10)
+    temperature = st.slider("Creativity (temperature)", 0.1, 1.0, 0.5, 0.1)
+    top_p = st.slider("Top-p sampling", 0.1, 1.0, 0.9, 0.05)
+    repetition_penalty = st.slider("Repetition penalty", 1.0, 2.0, 1.15, 0.05)
 
-# Session state for history
-if "history" not in st.session_state:
-    st.session_state.history = []
+    if st.button("🧹 Clear chat history"):
+        st.session_state.chat_history = []
 
-# Chat display
-for i, (user, bot) in enumerate(st.session_state.history):
-    st.chat_message("user").markdown(user)
-    st.chat_message("assistant").markdown(bot)
 
-# Input box
-user_msg = st.chat_input("Ask about software engineering…")
-if user_msg:
-    st.chat_message("user").markdown(user_msg)
+# --- Initialize chat history ---
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-    with st.spinner("Generating…"):
-        generator = load_generator()
-        prompt = build_prompt(st.session_state.history, user_msg)
 
-        out = generator(
-            prompt,
-            max_new_tokens=max_new,
+# --- Display chat history ---
+for user_message, ai_reply in st.session_state.chat_history:
+    st.chat_message("user").markdown(user_message)
+    st.chat_message("assistant").markdown(ai_reply)
+
+
+# --- Input box for new question ---
+user_input = st.chat_input("Ask me about software engineering...")
+if user_input:
+    st.chat_message("user").markdown(user_input)
+
+    with st.spinner("Thinking..."):
+        text_generator = load_text_generator()
+        prompt_text = build_conversation_prompt(st.session_state.chat_history, user_input)
+
+        generation_output = text_generator(
+            prompt_text,
+            max_new_tokens=max_new_tokens,
             do_sample=True,
-            temperature=temp,
+            temperature=temperature,
             top_p=top_p,
-            repetition_penalty=rep_pen,
-            pad_token_id=generator.tokenizer.eos_token_id,
-            eos_token_id=generator.tokenizer.eos_token_id,
+            repetition_penalty=repetition_penalty,
+            pad_token_id=text_generator.tokenizer.eos_token_id,
+            eos_token_id=text_generator.tokenizer.eos_token_id,
         )[0]["generated_text"]
 
-        # Extract the assistant's answer after the last "Answer:"
-        answer = out.split("Answer:")[-1].strip()
-        # If model starts another "Question:", cut it off
-        if "Question:" in answer:
-            answer = answer.split("Question:")[0].strip()
+        # Extract the model's answer from the text
+        generated_answer = generation_output.split("Answer:")[-1].strip()
+        if "Question:" in generated_answer:
+            generated_answer = generated_answer.split("Question:")[0].strip()
 
-    st.chat_message("assistant").markdown(answer)
-    st.session_state.history.append((user_msg, answer))
+    # --- Display and store chatbot response ---
+    st.chat_message("assistant").markdown(generated_answer)
+    st.session_state.chat_history.append((user_input, generated_answer))
